@@ -1,8 +1,6 @@
 import json
-import tkinter as tk
-from tkinter import messagebox, filedialog
+import streamlit as st
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
 # -------- VARIABLES --------
 version_float = 1.1
@@ -70,126 +68,110 @@ def interpret_score(score):
             return state
     return "Unknown"
 
-def save_json(filename, data):
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+def build_result_data(total_score, result, answers):
+    return {
+        "score": total_score,
+        "result": result,
+        "answers": answers,
+        "version": version_float,
+    }
 
-# -------- GUI --------
-class SurveyApp:
-    def __init__(self, root):
-        self.root = root
-        root.title("Handwriting vs Typing Retention Survey")
-        self.main_menu()
+def init_state():
+    st.session_state.setdefault("started", False)
+    st.session_state.setdefault("index", 0)
+    st.session_state.setdefault("total_score", 0)
+    st.session_state.setdefault("answers", [])
+    st.session_state.setdefault("finished", False)
 
-    def clear(self):
-        for w in self.root.winfo_children():
-            w.destroy()
 
-    def main_menu(self):
-        self.clear()
-        tk.Label(self.root, text="Survey Program", font=("Arial", 18)).pack(pady=10)
-        tk.Button(self.root, text="Start Survey", width=30, command=self.start).pack(pady=10)
+def reset_survey():
+    st.session_state.started = False
+    st.session_state.index = 0
+    st.session_state.total_score = 0
+    st.session_state.answers = []
+    st.session_state.finished = False
 
-    def start(self):
-        self.index = 0
-        self.total_score = 0
-        self.answers = []
-        self.show_question()
 
-    def show_question(self):
-        self.clear()
+def render_charts(scores):
+    labels = [f"Q{i+1}" for i in range(len(scores))]
 
-        q = questions[self.index]
+    fig, ax = plt.subplots()
+    ax.bar(labels, scores)
+    ax.set_title("Scores per Question")
+    ax.set_xlabel("Questions")
+    ax.set_ylabel("Score")
+    fig.tight_layout()
+    st.pyplot(fig)
+    plt.close(fig)
 
-        tk.Label(self.root, text=f"Question {self.index+1}/{len(questions)}", font=("Arial", 14)).pack(pady=5)
-        tk.Label(self.root, text=q["q"], wraplength=400).pack(pady=10)
+    handwriting = sum(1 for s in scores if s <= 2)
+    typing = sum(1 for s in scores if s > 2)
 
-        self.var = tk.IntVar(value=-1)
+    fig2, ax2 = plt.subplots()
+    ax2.pie([handwriting, typing], labels=["Handwriting", "Typing"], autopct="%1.1f%%")
+    ax2.set_title("Preference Distribution")
+    fig2.tight_layout()
+    st.pyplot(fig2)
+    plt.close(fig2)
 
-        for i, (text, score) in enumerate(q["opts"]):
-            tk.Radiobutton(self.root, text=text, variable=self.var, value=i).pack(anchor="w")
 
-        tk.Button(self.root, text="Next", command=self.next_q).pack(pady=10)
+def render_app():
+    st.set_page_config(page_title="Handwriting vs Typing Retention Survey", layout="centered")
+    init_state()
 
-    def next_q(self):
-        choice = self.var.get()
-        if choice == -1:
-            messagebox.showerror("Error", "Select an option")
+    st.title("Handwriting vs Typing Retention Survey")
+
+    if not st.session_state.started:
+        st.write("Survey Program")
+        if st.button("Start Survey", type="primary"):
+            st.session_state.started = True
+            st.rerun()
+        return
+
+    if st.session_state.finished:
+        result = interpret_score(st.session_state.total_score)
+        st.success("Completed!")
+        st.write(f"Score: {st.session_state.total_score}")
+        st.write(f"Result: {result}")
+
+        scores = [a["score"] for a in st.session_state.answers]
+        render_charts(scores)
+
+        payload = build_result_data(st.session_state.total_score, result, st.session_state.answers)
+        st.download_button(
+            "Save Results (JSON)",
+            data=json.dumps(payload, indent=2),
+            file_name="survey_results.json",
+            mime="application/json",
+        )
+
+        if st.button("Back to Menu"):
+            reset_survey()
+            st.rerun()
+        return
+
+    q = questions[st.session_state.index]
+    st.subheader(f"Question {st.session_state.index + 1}/{len(questions)}")
+    st.write(q["q"])
+
+    option_texts = [text for text, _ in q["opts"]]
+    selected_text = st.radio("Choose one option", option_texts, index=None)
+
+    if st.button("Next"):
+        if selected_text is None:
+            st.error("Select an option")
             return
 
-        q = questions[self.index]
-        text, score = q["opts"][choice]
+        selected = next(item for item in q["opts"] if item[0] == selected_text)
+        text, score = selected
+        st.session_state.total_score += score
+        st.session_state.answers.append({"question": q["q"], "answer": text, "score": score})
+        st.session_state.index += 1
 
-        self.total_score += score
-        self.answers.append({"question": q["q"], "answer": text, "score": score})
+        if st.session_state.index >= len(questions):
+            st.session_state.finished = True
 
-        self.index += 1
+        st.rerun()
 
-        if self.index >= len(questions):
-            self.finish()
-        else:
-            self.show_question()
 
-    def finish(self):
-        self.result = interpret_score(self.total_score)
-
-        self.clear()
-
-        tk.Label(self.root, text="Completed!", font=("Arial", 18)).pack(pady=10)
-        tk.Label(self.root, text=f"Score: {self.total_score}", font=("Arial", 14)).pack()
-        tk.Label(self.root, text=f"Result: {self.result}", font=("Arial", 14)).pack()
-
-        tk.Button(self.root, text="Show Graphs", command=self.show_graphs).pack(pady=10)
-        tk.Button(self.root, text="Save", command=self.save).pack(pady=5)
-        tk.Button(self.root, text="Menu", command=self.main_menu).pack(pady=5)
-
-    def show_graphs(self):
-        self.clear()
-
-        scores = [a["score"] for a in self.answers]
-        labels = [f"Q{i+1}" for i in range(len(scores))]
-
-        # BAR CHART
-        fig, ax = plt.subplots()
-        ax.bar(labels, scores)
-        ax.set_title("Scores per Question")
-        ax.set_xlabel("Questions")
-        ax.set_ylabel("Score")
-        plt.tight_layout()
-
-        canvas = FigureCanvasTkAgg(fig, master=self.root)
-        canvas.draw()
-        canvas.get_tk_widget().pack()
-
-        # PIE CHART
-        handwriting = sum(1 for s in scores if s <= 2)
-        typing = sum(1 for s in scores if s > 2)
-
-        fig2, ax2 = plt.subplots()
-        ax2.pie([handwriting, typing], labels=["Handwriting", "Typing"], autopct='%1.1f%%')
-        ax2.set_title("Preference Distribution")
-        plt.tight_layout()
-
-        canvas2 = FigureCanvasTkAgg(fig2, master=self.root)
-        canvas2.draw()
-        canvas2.get_tk_widget().pack()
-
-        tk.Button(self.root, text="Back", command=self.main_menu).pack(pady=10)
-
-    def save(self):
-        data = {
-            "score": self.total_score,
-            "result": self.result,
-            "answers": self.answers,
-            "version": version_float
-        }
-
-        path = filedialog.asksaveasfilename(defaultextension=".json")
-        if path:
-            save_json(path, data)
-            messagebox.showinfo("Saved", "File saved!")
-
-# -------- RUN --------
-root = tk.Tk()
-app = SurveyApp(root)
-root.mainloop()
+render_app()
